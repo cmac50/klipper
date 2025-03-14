@@ -78,7 +78,7 @@ gpio_valid(uint32_t pin)
 // the ODR register in memory to speed up toggle operations.
 static struct bsrr_cache
 {
-    uint32_t cached_bsrr;
+    uint8_t state;
 } BSRR_CACHE[9][16];
 
 static uint32_t
@@ -99,11 +99,12 @@ gpio_out_setup(uint32_t pin, uint32_t val)
     gpio_clock_enable(regs);
 
     irqstatus_t flag = irq_save();
-    BSRR_CACHE[port][index].cached_bsrr = regs->ODR & bit;
+    uint32_t state = regs->ODR & bit;
     irq_restore(flag);
-    if (BSRR_CACHE[port][index].cached_bsrr == 0)
-        BSRR_CACHE[port][index].cached_bsrr = bit << 16;
-
+    if (state)
+        BSRR_CACHE[port][index].state = 1;
+    else
+        BSRR_CACHE[port][index].state = 0;
     struct bsrr_cache *ptr = &BSRR_CACHE[port][index];
     struct gpio_out g = {.regs=regs, .c=ptr, .bit=bit};
     gpio_out_reset(g, val);
@@ -117,10 +118,10 @@ gpio_out_reset(struct gpio_out g, uint32_t val)
     int pin = regs_to_pin(regs, g.bit);
     irqstatus_t flag = irq_save();
     if (val)
-        g.c->cached_bsrr = g.bit;
+        g.c->state = 1;
     else
-        g.c->cached_bsrr = g.bit << 16;
-    regs->BSRR = g.c->cached_bsrr;
+        g.c->state = 0;
+    regs->BSRR = g.c->state ? g.bit : g.bit << 16;
     gpio_peripheral(pin, GPIO_OUTPUT, 0);
     irq_restore(flag);
 }
@@ -129,8 +130,8 @@ void
 gpio_out_toggle_noirq(struct gpio_out g)
 {
     GPIO_TypeDef *regs = g.regs;
-    g.c->cached_bsrr = g.c->cached_bsrr << 16 | g.c->cached_bsrr >> 16;
-    regs->BSRR = g.c->cached_bsrr;
+    g.c->state ^= 1;
+    regs->BSRR = g.c->state ? g.bit : g.bit << 16;
 }
 
 void
@@ -147,10 +148,10 @@ gpio_out_write(struct gpio_out g, uint32_t val)
     GPIO_TypeDef *regs = g.regs;
     irqstatus_t flag = irq_save();
     if (val)
-        g.c->cached_bsrr = g.bit;
+        g.c->state = 1;
     else
-        g.c->cached_bsrr = g.bit << 16;
-    regs->BSRR = g.c->cached_bsrr;
+        g.c->state = 0;
+    regs->BSRR = g.c->state ? g.bit : g.bit << 16;
     irq_restore(flag);
 }
 
