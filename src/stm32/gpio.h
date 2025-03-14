@@ -7,7 +7,7 @@
 struct gpio_out {
     void *regs;
 #if CONFIG_MACH_STM32H7
-    struct odr_cache *oc;
+    struct bsrr_cache *c;
 #endif
     uint32_t bit;
 };

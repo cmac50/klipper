@@ -76,24 +76,36 @@ gpio_valid(uint32_t pin)
 
 // The stm32h7 has very slow read access to the gpio registers.  Cache
 // the ODR register in memory to speed up toggle operations.
-static struct odr_cache {
-    uint32_t cached_odr;
-} ODR_CACHE[16];
+static struct bsrr_cache
+{
+    uint32_t cached_bsrr;
+} BSRR_CACHE[9][16];
+
+static uint32_t
+lowest_bit_pos(uint32_t x)
+{
+    return __builtin_ctz(x);
+}
 
 struct gpio_out
 gpio_out_setup(uint32_t pin, uint32_t val)
 {
     if (!gpio_valid(pin))
         shutdown("Not an output pin");
+    uint32_t bit = GPIO2BIT(pin);
     uint32_t port = GPIO2PORT(pin);
+    int index = lowest_bit_pos(bit);
     GPIO_TypeDef *regs = digital_regs[port];
     gpio_clock_enable(regs);
 
     irqstatus_t flag = irq_save();
-    ODR_CACHE[port].cached_odr = regs->ODR;
+    BSRR_CACHE[port][index].cached_bsrr = regs->ODR & bit;
     irq_restore(flag);
+    if (BSRR_CACHE[port][index].cached_bsrr == 0)
+        BSRR_CACHE[port][index].cached_bsrr = bit << 16;
 
-    struct gpio_out g = {.regs=regs, .oc=&ODR_CACHE[port], .bit=GPIO2BIT(pin)};
+    struct bsrr_cache *ptr = &BSRR_CACHE[port][index];
+    struct gpio_out g = {.regs=regs, .c=ptr, .bit=bit};
     gpio_out_reset(g, val);
     return g;
 }
@@ -105,10 +117,10 @@ gpio_out_reset(struct gpio_out g, uint32_t val)
     int pin = regs_to_pin(regs, g.bit);
     irqstatus_t flag = irq_save();
     if (val)
-        g.oc->cached_odr |= g.bit;
+        g.c->cached_bsrr = g.bit;
     else
-        g.oc->cached_odr &= ~g.bit;
-    regs->ODR = g.oc->cached_odr;
+        g.c->cached_bsrr = g.bit << 16;
+    regs->BSRR = g.c->cached_bsrr;
     gpio_peripheral(pin, GPIO_OUTPUT, 0);
     irq_restore(flag);
 }
@@ -117,8 +129,8 @@ void
 gpio_out_toggle_noirq(struct gpio_out g)
 {
     GPIO_TypeDef *regs = g.regs;
-    g.oc->cached_odr ^= g.bit;
-    regs->ODR = g.oc->cached_odr;
+    g.c->cached_bsrr = g.c->cached_bsrr << 16 | g.c->cached_bsrr >> 16;
+    regs->BSRR = g.c->cached_bsrr;
 }
 
 void
@@ -135,10 +147,10 @@ gpio_out_write(struct gpio_out g, uint32_t val)
     GPIO_TypeDef *regs = g.regs;
     irqstatus_t flag = irq_save();
     if (val)
-        g.oc->cached_odr |= g.bit;
+        g.c->cached_bsrr = g.bit;
     else
-        g.oc->cached_odr &= ~g.bit;
-    regs->ODR = g.oc->cached_odr;
+        g.c->cached_bsrr = g.bit << 16;
+    regs->BSRR = g.c->cached_bsrr;
     irq_restore(flag);
 }
 
